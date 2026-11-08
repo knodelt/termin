@@ -1,6 +1,6 @@
 # takt. — smarter Salon-Terminassistent (Prototyp)
 
-Ein funktionsfähiger, responsiver **Browser-Prototyp** für eine Friseur-Terminverwaltung mit WhatsApp-artiger Chat-Simulation. Fokus: Buchungslogik, Bedienkonzept, Kalender und automatische Antworten **ohne echte WhatsApp-Anbindung**.
+Ein Salon-Terminassistent mit **echter WhatsApp Cloud API (optional)** über Cloudflare Pages Functions und Cloudflare D1. Ohne Zugangsdaten bleibt die bisherige Browser-Simulation vollständig nutzbar. Echte Nachrichten erscheinen nach Admin-Anmeldung im Tab **WhatsApp Live** und echte Buchungen im Kalender.
 
 ## Funktionen
 
@@ -36,26 +36,40 @@ Optional können Dateien auch mit einem lokalen HTTP-Server bereitgestellt werde
 
 > Die Beispieldaten werden dynamisch zum heutigen Datum erzeugt. Der konkrete Freitag kann sich deshalb je nach Startdatum ändern.
 
-## Hinweis: Was **noch nicht** enthalten ist
 
-- **Keine WhatsApp Cloud API, kein WhatsApp-Versand, kein Webhook**. Der Messenger ist ausschließlich eine interaktive Simulation.
-- **Keine KI-API.** Die Erkennung erfolgt regelbasiert und deckt grundlegende deutsche Formulierungen ab. Für komplexe Anfragen ist später ein LLM mit strukturierter Ausgabe sinnvoll.
-- **Keine Benutzerkonten und kein Cloud-Sync.** Termine liegen nur im lokalen Browser und sind nicht zwischen Geräten synchronisiert. Produktiver Mehrbenutzerbetrieb erfordert eine persistente Datenbank und Transaktionen gegen Doppelbuchungen.
-- **Keine echte Kundenidentität.** Absagen im Demo-Chat sind nur für Termine möglich, die in genau diesem Testchat gebucht wurden.
-- Öffnungszeiten, Pause und Mitarbeiter sind im Prototyp fest vorgegeben; Behandlungsdauer/Preise können bearbeitet werden.
+## WhatsApp Cloud API verbinden (Cloudflare Pages)
 
-## Weg zum produktiven System
+**Voraussetzungen:** Cloudflare-Pages-Projekt mit GitHub-Repository `knodelt/termin`, Meta-Developer-Konto, WhatsApp Business Platform (Cloud API). Die Nummern und Zugangsdaten musst du selbst in Meta und Cloudflare hinterlegen. **Keinen API-Schlüssel ins GitHub-Repository oder in einen Chat kopieren.**
 
-1. Cloudflare Worker als Backend, D1-Datenbank mit `salon_id`, `appointment_id`, `customer_id`, WhatsApp-IDs und Status.
-2. Offizielle **WhatsApp Business Platform / Cloud API** mit sicherem Webhook und Signaturprüfung, verifizierten Credentials als Secrets, Zustell-/Fehlerbehandlung sowie Opt-in und Template-Regeln.
-3. **Transaktionale Buchungslogik** im Backend, inklusive atomarer Konfliktvermeidung, Öffnungszeiten, Mitarbeiter-/Serviceverwaltung und Zeitzonen.
-4. Authentifizierung, Salon-Mandantentrennung, DSGVO-Prozesse und dokumentierte Aufbewahrungsfristen.
-5. Optional ein LLM zur Spracherkennung — die KI darf nur Buchungsabsichten aufbereiten, **niemals direkt Kalender-Daten ohne serverseitige Prüfung verändern**.
+1. **D1-Datenbank:** Cloudflare → Workers & Pages → D1 → Neue Datenbank, z. B. `takt-live`. Das SQL-Schema aus `migrations/0001_whatsapp.sql` einmal auf der D1-Datenbank ausführen (beispielsweise mit Wrangler: `npx wrangler d1 execute takt-live --remote --file=migrations/0001_whatsapp.sql`).
+2. **D1 anbinden:** Im Pages-Projekt → Settings → Bindings → Add → D1 database. **Variablenname exakt `DB`**, Datenbank `takt-live` auswählen. Danach ein neues Deployment auslösen.
+3. **Secrets im Pages-Projekt:** Unter Settings → Variables and Secrets auf **Encrypt** stellen für:
+   - `WA_VERIFY_TOKEN` – selbst gewählter langer zufälliger String (derselbe Wert muss in Meta unter Webhooks stehen).
+   - `META_APP_SECRET` – App Secret aus Meta → App Settings → Basic, für die kryptografische Webhook-Signaturprüfung.
+   - `WA_ACCESS_TOKEN` – WhatsApp Cloud API-Zugriffstoken. Für einen ersten Test geht ein temporärer Token; für den Dauerbetrieb einen berechtigten Systemnutzer-Token verwenden.
+   - `WA_PHONE_NUMBER_ID` – Phone Number ID (nicht die sichtbare Telefonnummer) aus Meta WhatsApp → API Setup.
+   - `ADMIN_API_KEY` – **eigener, zufälliger geheimer Admin-Schlüssel**, mindestens 32 Zeichen, nur für den geschützten Live-Bereich der Website.
+   - Optional die Textvariable `WA_GRAPH_VERSION=v25.0` (API-Version an die aktuell in Meta unterstützte Version anpassen).
+   Die Secrets **auch für Production** setzen, wenn du die Pages-Produktionsadresse verwendest; anschließend erneut deployen.
+4. **Meta-Webhook:** Bei Meta for Developers → WhatsApp → Configuration / Webhooks als **Callback-URL** die öffentliche HTTPS-Adresse `https://DEIN-PAGES-PROJEKT.pages.dev/api/whatsapp/webhook` hinterlegen; **Verify token** ist der Wert von `WA_VERIFY_TOKEN`. Auf das **messages**-Feld abonnieren. GET verifiziert den Webhook; POST verarbeitet eingehende WhatsApp-Nachrichten mit `x-hub-signature-256`.
+5. **Erster Live-Test:** Mit einer in Meta erlaubten Testnummer an die Meta-Testnummer schreiben (später an eine registrierte echte Business-Nummer). Beispiel: `Ich brauche am 13.11. um 15 Uhr einen Damenhaarschnitt`. Der Assistent prüft den D1-Kalender und fragt vor dem Eintragen nach Bestätigung. Danach `Ja` schreiben. Die Antwort kommt über die Cloud API zurück.
+6. **In der App:** Tab **WhatsApp Live** → `ADMIN_API_KEY` eingeben. Nach erfolgreicher Anmeldung werden echte Nachrichten und Buchungen geladen. Der Kalender zeigt dann **Live-Termine** statt Demo-Daten. Die Live-Abfrage ist read-only und fragt alle 30 Sekunden nach neuen Daten. Zugangsdaten und Live-Kundendaten werden nicht im lokalen Browser-Speicher persistiert.
 
-## Tests
+### API-Endpunkte
+- `GET /api/whatsapp/webhook` – Meta-Challenge-Validierung
+- `POST /api/whatsapp/webhook` – signierte Nachrichten, D1-Buchung, automatischer Antwortversand
+- `GET /api/live` – geschützter Lesezugriff für App-Kalender, Nachrichten und Termine (`Authorization: Bearer <ADMIN_API_KEY>`)
 
-```bash
-npm test
-```
+### Technischer Umfang der Live-Version
+- Regelebasierte deutsche Texterkennung aus `src/core.js`, **noch keine generative KI**.
+- Fragt bei fehlenden Angaben nach und bucht **erst nach ausdrücklicher Bestätigung**.
+- Prüft Öffnungszeiten, Pausen, Behandlungsdauer und vorhandene Buchungen. SQLite-Trigger verhindert überlappende Live-Buchungen für dieselbe Mitarbeiterin sogar bei gleichzeitigen Webhooks.
+- Unterstützt Terminanfragen, alternative Uhrzeiten und Absagen des nächsten eigenen Termins. Mehrfachbuchungen derselben Person werden nicht einzeln zur Auswahl angeboten.
+- Doppelte Nachrichten werden anhand der Meta-Nachrichten-ID erkannt; Zustellfehler werden im Backend gekennzeichnet.
+- Backend ist für **einen Salon** mit den derzeit fest hinterlegten Leistungen und Mitarbeiterinnen ausgelegt. Das Bearbeiten von Leistungen in der **Demo** verändert noch nicht die serverseitigen Live-Leistungen. Die manuelle Erstellung oder Absage von Live-Terminen in der Web-App ist aktuell deaktiviert.
+- Admin-Zugriff ist für den **Prototyp** mit einem langen geheimen Token geschützt. Für den Produktivbetrieb empfehlen sich Cloudflare Access, Benutzerkonten/Rollen, sicherer Schlüsselwechsel, Löschkonzept/Datenschutz, Message-Retry-Queue und weitere Tests.
+- Keine automatische Nachricht außerhalb des WhatsApp-Kundenservicefensters: Dafür benötigt man von Meta genehmigte Templates und die passenden Berechtigungen.
 
-Technologie: HTML, CSS, JavaScript ES Modules. Keine Abhängigkeiten für das Frontend.
+### Lokaler Test
+`npm test` prüft die bestehende Datum-/Buchungslogik. Die Pages Functions benötigen für einen vollständigen Ende-zu-Ende-Test die D1-Bindung sowie gültige Meta-Testzugangsdaten; ein Cloudflare-Deployment erfolgt nicht automatisch durch den GitHub-Commit.
+
