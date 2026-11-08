@@ -41,7 +41,8 @@ const timeStamp = () => new Intl.DateTimeFormat('de-DE', {timeZone:TIMEZONE,hour
 const firstName = name => String(name).split(' ')[0];
 const serviceOf = id => state.services.find(s => s.id === id) || state.services[0];
 const staffOf = id => STAFF.find(s => s.id === id) || STAFF[0];
-const appointmentsOn = date => state.appointments.filter(a => a.date === date && a.status !== 'cancelled').sort((a,b)=>a.time.localeCompare(b.time));
+const getAppointments = () => liveData ? liveData.appointments.map(a => ({...a,origin:'whatsapp'})) : state.appointments;
+const appointmentsOn = date => getAppointments().filter(a => a.date === date && a.status !== 'cancelled').sort((a,b)=>a.time.localeCompare(b.time));
 const booked = a => a.status !== 'cancelled';
 const n = num => new Intl.NumberFormat('de-DE').format(num);
 const randomId = () => globalThis.crypto?.randomUUID?.() || `demo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -69,6 +70,8 @@ function getState() {
 }
 let state = getState();
 let selectedBookingId = null;
+let liveData = null; // Nur im Speicher, echte Kundendaten nicht in localStorage.
+let liveKey = ''; // Nur für diese Sitzung im Arbeitsspeicher.
 let toastTimer;
 function persist() {
   try { localStorage.setItem(STORE_KEY,JSON.stringify(state)); } catch(e) { /* Demo bleibt im aktuellen Tab nutzbar. */ }
@@ -128,24 +131,24 @@ function chatPanel(compact=false) {
   </section>`;
 }
 function upcomingList() {
-  const items=state.appointments.filter(a=>booked(a)&&a.date>=todayISO()).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,4);
+  const items=getAppointments().filter(a=>booked(a)&&a.date>=todayISO()).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,4);
   return `<section class="panel">${panelTitle('Demnächst im Salon','Deine nächsten bestätigten Termine','clock',`<button class="btn btn-outline btn-small" type="button" data-nav="calendar">Alle ansehen ${icon('arrow-right')}</button>`)}<div class="upcoming-list">${items.length?items.map(a=>`<div class="upcoming-item"><div class="upcoming-date">${escapeHTML(displayDate(a.date,{day:'numeric',month:'short'}))}<small>${a.time} Uhr</small></div><span class="avatar ${staffOf(a.staffId).color}">${staffOf(a.staffId).initials}</span><div class="upcoming-main"><strong>${escapeHTML(a.client)}</strong><small>${escapeHTML(serviceOf(a.serviceId).name)} · ${staffOf(a.staffId).name}</small></div><span class="booking-tag">Bestätigt</span></div>`).join(''):`<div class="empty-state">Noch keine anstehenden Termine</div>`}</div></section>`;
 }
 function renderDashboard() {
   const today=todayISO(), week=mondayOf(today), weekEnd=addDays(week,6);
   const todayCount=appointmentsOn(today).length;
-  const weekCount=state.appointments.filter(a=>booked(a) && a.date>=week && a.date<=weekEnd).length;
-  const demoCount=state.appointments.filter(a=>booked(a) && a.origin==='chat').length;
+  const weekCount=getAppointments().filter(a=>booked(a) && a.date>=week && a.date<=weekEnd).length;
+  const demoCount=getAppointments().filter(a=>booked(a) && (a.origin==='chat'||a.origin==='whatsapp')).length;
   const hour=new Date().toLocaleString('de-DE',{timeZone:TIMEZONE,hour:'2-digit',hourCycle:'h23'});
   const greeting=Number(hour)<11?'Guten Morgen':Number(hour)<17?'Guten Tag':'Guten Abend';
   return `${header('Dein Tag. Dein Rhythmus.',`${greeting}<span style="color:#adc76e">.</span>`,`Termine im Blick, Anfragen im Griff. Dein Salon läuft.`,`<span class="title-date">${escapeHTML(formatLong(today))}</span>`)}
-  <div class="stats-grid">${stat('Termine heute',n(todayCount),todayCount===0?'Noch keine Termine':'Eingeplant für heute','calendar-check')}${stat('Diese Woche',n(weekCount),'Bestätigte Buchungen','calendar-days')}${stat('Vom Assistenten',n(demoCount),'Im Testchat gebucht','sparkles')}${stat('Team im Einsatz',String(STAFF.length),'Mara & Leonie','users')}</div>
+  <div class="stats-grid">${stat('Termine heute',n(todayCount),todayCount===0?'Noch keine Termine':'Eingeplant für heute','calendar-check')}${stat('Diese Woche',n(weekCount),'Bestätigte Buchungen','calendar-days')}${stat('Vom Assistenten',n(demoCount),liveData?'Per WhatsApp gebucht':'Im Testchat gebucht','sparkles')}${stat('Team im Einsatz',String(STAFF.length),'Mara & Leonie','users')}</div>
   <div class="grid-primary">${renderCalendarPreview()}${chatPanel(true)}</div>
   <div class="below-grid">${upcomingList()}<section class="intro-panel"><div class="intro-icon">${icon('sparkles')} SO EINFACH KANN BUCHEN SEIN</div><h2>Deine Kunden schreiben. Dein Kalender antwortet.</h2><p>Teste eine Anfrage für Freitag um 15 Uhr. Beide Stylistinnen sind bereits belegt – der Assistent findet passende Alternativen.</p><button type="button" class="btn btn-lime btn-small" data-nav="inbox">Testchat öffnen ${icon('arrow-right')}</button></section></div>`;
 }
 function calendarView() {
   const dates=Array.from({length:7},(_,i)=>addDays(state.weekStart,i));
-  let active=state.appointments.filter(booked);
+  let active=getAppointments().filter(booked);
   const headerCells=dates.map(d=>`<span class="${d===todayISO()?'is-today':''} ${dayOfWeek(d)===0?'is-closed':''}">${escapeHTML(weekdayShort(d))}<strong>${Number(d.slice(-2))}</strong></span>`).join('');
   const columns=dates.map(d=>{
     const dayA=appointmentsOn(d);
@@ -167,7 +170,7 @@ function inboxView() {
   return `${header('Immer im Gespräch.','Nachrichten & Assistent','Teste echte Gesprächsabläufe – von der Anfrage bis zur Bestätigung.',`<button class="btn btn-dark" data-action="new-thread">${icon('plus')} Testchat</button>`)}
   <div class="inbox-grid"><section class="panel threads-panel">${panelTitle('Gespräche','Testkunden','users',`<button class="icon-btn" type="button" data-action="new-thread" title="Neuer Testkunde">${icon('plus')}</button>`)}<div class="threads-list">${state.threads.map(t=>{const last=t.messages.at(-1);return `<button type="button" class="thread-item ${t.id===state.activeThreadId?'active':''}" data-thread="${t.id}"><span class="avatar">${escapeHTML(firstName(t.name).slice(0,1))}</span><span class="thread-copy"><strong>${escapeHTML(t.name)}</strong><small>${escapeHTML(last?.text||'').slice(0,50)}</small></span><span class="thread-time">${escapeHTML(last?.time||'')}</span></button>`;}).join('')}</div></section>
   ${chatPanel()}
-  <section class="panel inbox-info"><div class="info-icon">${icon('sparkles')}</div><h3>So arbeitet takt.</h3><p>Dein digitaler Empfang erkennt Terminwünsche in normaler Sprache und gleicht sie automatisch mit dem Kalender ab.</p><div class="info-line">${icon('check')} Erkennt Datum, Uhrzeit & Leistung</div><div class="info-line">${icon('check')} Beachtet Öffnungszeiten & Pausen</div><div class="info-line">${icon('check')} Verhindert Überschneidungen</div><div class="info-line">${icon('check')} Bucht erst nach einer Bestätigung</div><div class="settings-alert"><strong>Nur Simulation</strong> Die echte WhatsApp Cloud API ist noch nicht angebunden. Der Test läuft rein im Browser.</div></section></div>`;
+  <section class="panel inbox-info"><div class="info-icon">${icon('sparkles')}</div><h3>So arbeitet takt.</h3><p>Dein digitaler Empfang erkennt Terminwünsche in normaler Sprache und gleicht sie automatisch mit dem Kalender ab.</p><div class="info-line">${icon('check')} Erkennt Datum, Uhrzeit & Leistung</div><div class="info-line">${icon('check')} Beachtet Öffnungszeiten & Pausen</div><div class="info-line">${icon('check')} Verhindert Überschneidungen</div><div class="info-line">${icon('check')} Bucht erst nach einer Bestätigung</div><div class="settings-alert"><strong>Nur Simulation</strong> Dieser Testchat bleibt simuliert. Echte eingehende WhatsApp-Nachrichten findest du unter WhatsApp Live.</div></section></div>`;
 }
 function serviceCard(s) {
   return `<section class="panel service-card ${s.color}"><button type="button" class="icon-btn" data-edit-service="${s.id}" title="Leistung bearbeiten" aria-label="${escapeHTML(s.name)} bearbeiten">${icon('edit')}</button><span class="service-icon">${icon(s.id==='farbe'?'wand':s.id==='styling'?'sparkles':'scissors')}</span><h2>${escapeHTML(s.name)}</h2><p>Service im Salon</p><div class="service-bottom"><div><div class="service-price">${n(s.price)} €</div><div class="service-duration">Preis pro Behandlung</div></div><span class="booking-tag">${s.duration} Min.</span></div></section>`;
@@ -183,20 +186,44 @@ function settingsView() {
     <div class="setting-row"><div><strong>Studioname</strong><small>Name im Terminassistenten</small></div><div class="value">${escapeHTML(state.salonName)}</div></div>
     <div class="setting-row"><div><strong>Mitarbeiterinnen</strong><small>Automatische Zuordnung beim Buchen</small></div><div class="value">${STAFF.map(s=>`<span class="staff-pill"><span class="avatar ${s.color}">${s.initials}</span>${s.name}</span>`).join('')}</div></div>
     <div class="setting-row"><div><strong>Mittagspause</strong><small>Für beide Teammitglieder</small></div><div class="value">12:30 – 13:00</div></div>
-    <div class="setting-row"><div><strong>WhatsApp-Verbindung</strong><small>Für den Prototyp deaktiviert</small></div><div class="value">Nicht verbunden</div></div>
-    <div class="settings-alert"><strong>${icon('shield-check')} Lokal und privat</strong> Alle Testtermine und Nachrichten bleiben in deinem Browser. Es gibt im Prototyp keinen Server und keine externen Nachrichten.</div></section>
+    <div class="setting-row"><div><strong>WhatsApp-Verbindung</strong><small>Echte Termine in D1, sobald Meta eingerichtet ist</small></div><div class="value">${liveData ? (liveData.waConfigured?'API eingerichtet':'API-Zugang fehlt') : 'Nicht angemeldet'}</div></div>
+    <div class="settings-alert"><strong>${icon('shield-check')} Simulation und Live getrennt</strong> Demo-Termine bleiben im Browser. Echte WhatsApp-Termine werden in Cloudflare D1 gespeichert und nur nach Admin-Anmeldung angezeigt.</div></section>
     <section class="panel settings-box">${panelTitle('Öffnungszeiten','Aktuell festgelegte Demo-Zeiten','clock')}
     ${weekdays.map(([name,day])=>`<div class="setting-row"><strong>${name}</strong><span class="value">${HOURS[day]?`${clock(HOURS[day][0])} – ${clock(HOURS[day][1])}`:'Geschlossen'}</span></div>`).join('')}
     <div class="setting-row"><div><strong>Demo zurücksetzen</strong><small>Entfernt alle Änderungen und Testbuchungen</small></div><button type="button" class="btn btn-secondary btn-small" data-action="reset">${icon('rotate-ccw')} Zurücksetzen</button></div></section></div>`;
 }
+function liveView() {
+  const callback = escapeHTML(location.origin + '/api/whatsapp/webhook');
+  const credentials = `<section class="panel settings-box" style="max-width:640px"><h2>Live-Zugang</h2><p class="page-subtitle" style="margin:12px 0 20px">Gib den in Cloudflare als ADMIN_API_KEY hinterlegten Schlüssel ein. Der Schlüssel wird nur im Speicher dieses Tabs verwendet.</p><form id="liveConnectForm"><div class="form-field"><label class="form-label" for="live-token">Admin-Schlüssel</label><input type="password" id="live-token" name="key" class="form-input" autocomplete="off" required placeholder="ADMIN_API_KEY"></div><button class="btn btn-dark" type="submit">Live-Daten verbinden</button></form></section>`;
+  if (!liveData) return `${header('WhatsApp statt Telefonklingeln.','WhatsApp Live','Hier erscheinen die echten Kundennachrichten und Buchungen aus Cloudflare D1.')}${credentials}<div class="settings-alert"><strong>Meta-Webhook-Adresse</strong><code>${callback}</code><p style="margin:6px 0 0">Diese HTTPS-Adresse in der Meta-App bei Webhooks hinterlegen. Die Anmeldung hier ersetzt nicht die Freischaltung durch Meta.</p></div>`;
+  const recent = liveData.threads.flatMap(t => t.messages.map(m => ({...m,name:t.name,waId:t.waId}))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,36);
+  const future = liveData.appointments.filter(a=>a.status==='confirmed' && a.date>=todayISO()).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  return `${header('WhatsApp Live','Echte Anfragen & Buchungen',liveData.waConfigured?'Backend-Zugang und WhatsApp-Schlüssel sind eingerichtet. Prüfe zusätzlich die Meta-Webhook-Verifizierung.':'Datenbank ist erreichbar. Für den WhatsApp-Empfang fehlen noch Meta-Schlüssel.',`<button data-action="refresh-live" class="btn btn-dark" type="button">Aktualisieren</button><button data-action="disconnect-live" class="btn btn-outline" type="button">Abmelden</button>`)}
+    <div class="stats-grid">${stat('Live-Buchungen',String(future.length),'Aktuell bestätigt','calendar-check')}${stat('WhatsApp-Kontakte',String(liveData.threads.length),'Im D1-Postfach','users')}${stat('Nachrichten',String(recent.length),'Letzte 120 gesamt','message-circle')}${stat('API-Konfiguration',liveData.waConfigured?'OK':'Offen',liveData.waConfigured?'Schlüssel hinterlegt':'Meta-Schlüssel ergänzen','shield-check')}</div>
+    <div class="settings-layout"><section class="panel settings-box"><h2>Kommende Live-Termine</h2><div style="margin-top:12px">${future.length?future.slice(0,25).map(a=>`<div class="setting-row"><div><strong>${escapeHTML(a.client)}</strong><small>${escapeHTML(a.date)} · ${escapeHTML(a.time)} Uhr · ${escapeHTML(serviceOf(a.serviceId).name)}</small></div><div class="value">${escapeHTML(staffOf(a.staffId).name)}</div></div>`).join(''):'<p class="page-subtitle" style="margin-top:18px">Noch keine echten Buchungen.</p>'}</div></section>
+    <section class="panel settings-box"><h2>Letzte WhatsApp-Nachrichten</h2><div style="margin-top:12px;max-height:650px;overflow:auto">${recent.length?recent.map(m=>`<div class="setting-row"><div style="min-width:0"><strong>${escapeHTML(m.name)} · ${m.direction==='in'?'Kunde':'Assistent'}</strong><small style="white-space:normal;overflow-wrap:anywhere;line-height:1.5">${escapeHTML(m.body)}</small></div><div class="value" style="white-space:nowrap">${escapeHTML(m.createdAt.slice(0,16))}</div></div>`).join(''):'<p class="page-subtitle" style="margin-top:18px">Noch keine eingehenden WhatsApp-Nachrichten.</p>'}</div></section></div>`;
+}
+async function refreshLive() {
+  if (!liveKey) return;
+  try {
+    const response = await fetch('/api/live',{headers:{authorization:`Bearer ${liveKey}`},cache:'no-store'});
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    liveData = data;
+    render();
+  } catch(error) {
+    if(/Zugriff verweigert|401/.test(error.message)){liveKey='';liveData=null;}
+    render();toast(error.message);
+  }
+}
 function render() {
-  const titles={dashboard:'ÜBERSICHT',calendar:'KALENDER',inbox:'NACHRICHTEN',services:'LEISTUNGEN',settings:'EINSTELLUNGEN'};
+  const titles={dashboard:'ÜBERSICHT',calendar:'KALENDER',inbox:'TESTCHAT',live:'WHATSAPP LIVE',services:'LEISTUNGEN',settings:'EINSTELLUNGEN'};
   $('#breadcrumb').textContent=titles[state.view]||'ÜBERSICHT';
   $('#sidebar-salon').textContent=state.salonName;
   $('#top-date').textContent=displayDate(todayISO(),{weekday:'short',day:'numeric',month:'long'});
   document.querySelectorAll('[data-nav]').forEach(el=>{const active=el.dataset.nav===state.view;el.classList.toggle('active',active);if(el.matches('.nav-link'))el.setAttribute('aria-current',active?'page':'false');});
   $('#nav-message-count').textContent=String(state.threads.length);
-  const views={dashboard:renderDashboard,calendar:calendarView,inbox:inboxView,services:servicesView,settings:settingsView};
+  const views={dashboard:renderDashboard,calendar:calendarView,inbox:inboxView,live:liveView,services:servicesView,settings:settingsView};
   $('#page-content').innerHTML=(views[state.view]||renderDashboard)();
   document.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
   requestAnimationFrame(()=>{document.querySelectorAll('[data-chat-scroll]').forEach(el=>el.scrollTop=el.scrollHeight);});
@@ -297,29 +324,31 @@ function studioModal() {
 }
 function detailsModal(id) {
   selectedBookingId=id;
-  const a=state.appointments.find(x=>x.id===id);if(!a)return;
+  const a=getAppointments().find(x=>x.id===id);if(!a)return;
   const s=serviceOf(a.serviceId),staff=staffOf(a.staffId);
   modal(`${modalHeading('Termindetails','Alle Informationen zu dieser Buchung.')}
     <div class="modal-body"><div class="details-heading">${escapeHTML(a.client)}</div><div class="details-date">${icon('calendar-days')} ${escapeHTML(formatLong(a.date))}<div><strong>${a.time} – ${endTime(a.time,a.duration||s.duration)} Uhr</strong></div></div>
-    <div class="details-row"><span>Leistung</span><strong>${escapeHTML(s.name)}</strong></div><div class="details-row"><span>Mitarbeiterin</span><strong>${staff.name}</strong></div><div class="details-row"><span>Herkunft</span><strong>${a.origin==='chat'?'Testchat':a.origin==='demo'?'Beispieldaten':'Manuell'}</strong></div>
-    <div class="modal-actions"><button class="btn btn-secondary" type="button" data-action="close-modal">Schließen</button>${booked(a)?`<button class="btn danger" type="button" data-action="cancel-booking">${icon('trash')} Termin absagen</button>`:''}</div></div>`);
+    <div class="details-row"><span>Leistung</span><strong>${escapeHTML(s.name)}</strong></div><div class="details-row"><span>Mitarbeiterin</span><strong>${staff.name}</strong></div><div class="details-row"><span>Herkunft</span><strong>${a.origin==='whatsapp'?'WhatsApp Live':a.origin==='chat'?'Testchat':a.origin==='demo'?'Beispieldaten':'Manuell'}</strong></div>
+    <div class="modal-actions"><button class="btn btn-secondary" type="button" data-action="close-modal">Schließen</button>${booked(a) && a.origin!=='whatsapp'?`<button class="btn danger" type="button" data-action="cancel-booking">${icon('trash')} Termin absagen</button>`:''}</div></div>`);
 }
 function showError(message){const el=$('#modal-error');if(el)el.innerHTML=`<p class="modal-error">${escapeHTML(message)}</p>`;}
 
 document.addEventListener('click', e=>{
   if(e.target.matches('[data-overlay]')){closeModal();return;}
-  const nav=e.target.closest('[data-nav]');if(nav){change({view:nav.dataset.nav});window.scrollTo({top:0,behavior:'smooth'});return;}
+  const nav=e.target.closest('[data-nav]');if(nav){change({view:nav.dataset.nav});if(nav.dataset.nav==='live' && liveKey)refreshLive();window.scrollTo({top:0,behavior:'smooth'});return;}
   const week=e.target.closest('[data-week]');if(week){change({weekStart:addDays(state.weekStart,Number(week.dataset.week)),selectedDate:addDays(state.selectedDate,Number(week.dataset.week))});return;}
   const date=e.target.closest('[data-date]');if(date){change({selectedDate:date.dataset.date});return;}
   const th=e.target.closest('[data-thread]');if(th){change({activeThreadId:th.dataset.thread});return;}
   const suggestion=e.target.closest('[data-suggestion]');if(suggestion){sendCustomerMessage(suggestion.dataset.suggestion);return;}
   const service=e.target.closest('[data-edit-service]');if(service){serviceModal(service.dataset.editService);return;}
   const app=e.target.closest('[data-appointment]');if(app){detailsModal(app.dataset.appointment);return;}
-  const cal=e.target.closest('[data-cal-date]');if(cal){const box=cal.getBoundingClientRect();const diff=Math.max(0,e.clientY-box.top);const start=Math.round((540+diff)/15)*15;bookingModal(cal.dataset.calDate,clock(Math.min(17*60,Math.max(9*60,start))));return;}
+  const cal=e.target.closest('[data-cal-date]');if(cal){if(liveData){toast('Manuelle Live-Buchungen sind noch nicht verfügbar.');return;}const box=cal.getBoundingClientRect();const diff=Math.max(0,e.clientY-box.top);const start=Math.round((540+diff)/15)*15;bookingModal(cal.dataset.calDate,clock(Math.min(17*60,Math.max(9*60,start))));return;}
   const action=e.target.closest('[data-action]')?.dataset.action;
   if(!action)return;
   switch(action){
-    case 'new-booking':bookingModal();break;
+    case 'refresh-live':refreshLive();break;
+    case 'disconnect-live':liveData=null;liveKey='';render();toast('Live-Ansicht abgemeldet');break;
+    case 'new-booking':if(liveData)toast('Live-Buchungen kommen über WhatsApp. Für manuelle Live-Termine folgt eine eigene Funktion.');else bookingModal();break;
     case 'close-modal':closeModal();break;
     case 'today':change({selectedDate:todayISO(),weekStart:mondayOf(todayISO())});break;
     case 'new-thread':{const id=randomId();const thread=makeThread(state.threads.length+1,`Testkunde ${state.threads.length+1}`);thread.id=id;state.threads.unshift(thread);change({activeThreadId:id,view:'inbox'});toast('Neuer Testchat gestartet');break;}
@@ -333,11 +362,13 @@ document.addEventListener('click', e=>{
   }
 });
 document.addEventListener('submit',e=>{
-  if(!['chatForm','bookingForm','serviceForm','studioForm'].includes(e.target.id))return;
+  if(!['chatForm','bookingForm','serviceForm','studioForm','liveConnectForm'].includes(e.target.id))return;
   e.preventDefault();
   const form=e.target, data=Object.fromEntries(new FormData(form).entries());
+  if(form.id==='liveConnectForm'){liveKey=data.key.trim();form.reset();refreshLive();return;}
   if(form.id==='chatForm'){form.reset();sendCustomerMessage(data.message);return;}
   if(form.id==='bookingForm'){
+    if(liveData)return showError('Live-Buchungen können noch nicht manuell angelegt werden.');
     if(!data.client?.trim())return showError('Bitte den Kundennamen eintragen.');
     const a=availability(data.date,data.time,data.serviceId,data.staffId||null);
     if(!a.ok)return showError(`Dieser Termin kann nicht gebucht werden: ${a.reason}.`);
@@ -356,4 +387,5 @@ document.addEventListener('submit',e=>{
   }
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape' && $('#modal-root').children.length)closeModal();});
+setInterval(()=>{if(liveKey && document.visibilityState==='visible')refreshLive();},30000);
 render();
