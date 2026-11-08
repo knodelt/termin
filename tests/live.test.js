@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { todayISO, addDays, nextWeekday } from '../src/core.js';
+const NEXT_FRIDAY=nextWeekday(addDays(todayISO(),1),5);
+const WISH_DATE=`${Number(NEXT_FRIDAY.slice(8))}.${Number(NEXT_FRIDAY.slice(5,7))}.${NEXT_FRIDAY.slice(0,4)}`;
 import { onRequestGet, onRequestPost } from '../functions/api/whatsapp/webhook.js';
 import { onRequestGet as liveGet } from '../functions/api/live.js';
 
@@ -41,7 +44,7 @@ test('Terminbuchung per WhatsApp, idempotent, Konflikte und geschütztes Live-Po
   globalThis.fetch=async (url,opt)=>{calls.push(JSON.parse(opt.body));return new Response('{}',{status:200});};
   try {
     const customer='491234567890';
-    let r=await post(env,'mid-1',customer,'Hallo ich brauche am 13.11.2026 um 15 Uhr einen Herrenhaarschnitt');assert.equal(r.status,200);
+    let r=await post(env,'mid-1',customer,`Hallo ich brauche am ${WISH_DATE} um 15 Uhr einen Herrenhaarschnitt`);assert.equal(r.status,200);
     assert.match(calls.at(-1).text.body,/15:00 Uhr ist/);
     assert.equal(db.sqlite.prepare('select count(*) as n from appointments').get().n,0,'Nicht vor der Bestätigung buchen');
     r=await post(env,'mid-2',customer,'Ja, bitte buchen');assert.equal(r.status,200);
@@ -50,11 +53,11 @@ test('Terminbuchung per WhatsApp, idempotent, Konflikte und geschütztes Live-Po
     r=await post(env,'mid-2',customer,'Ja, bitte buchen');assert.equal(r.status,200);
     assert.equal(calls.length,callCount,'Duplicate webhook should not send twice');
     const second='491234567891';
-    await post(env,'mid-3',second,'13.11.2026 um 15 Uhr Herrenhaarschnitt');
+    await post(env,'mid-3',second,`${WISH_DATE} um 15 Uhr Herrenhaarschnitt`);
     await post(env,'mid-4',second,'Ja');
     assert.equal(db.sqlite.prepare('select count(*) as n from appointments').get().n,2);
     const third='491234567892';
-    await post(env,'mid-5',third,'13.11.2026 um 15 Uhr Herrenhaarschnitt');
+    await post(env,'mid-5',third,`${WISH_DATE} um 15 Uhr Herrenhaarschnitt`);
     assert.match(calls.at(-1).text.body,/geht es leider nicht/);
     const denied=await liveGet({request:new Request('https://beispiel.pages.dev/api/live'),env});assert.equal(denied.status,401);
     const ok=await liveGet({request:new Request('https://beispiel.pages.dev/api/live',{headers:{authorization:'Bearer admin-super-secret'}}),env});
