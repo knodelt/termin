@@ -1,0 +1,11 @@
+{
+  "name": "takt-terminassistent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interaktiver Demo-Prototyp für einen WhatsApp-Terminassistenten im Salon",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "dev": "npx serve . -l 4173"
+  }
+}
